@@ -1,0 +1,25 @@
+# --- Claves y credenciales (nunca al repositorio) ---
+.env
+.env.*
+*.pem
+credentials.json
+token.json
+client_secret*.json
+.clasp.json
+.clasprc.json
+supabase/.env
+supabase/.temp/
+
+# --- Datos reales y material privado ---
+data/
+uploads/
+notas_privadas/
+proyecto_finanzas_automatizadas.md
+*.csv
+*.xlsx
+
+# --- Sistema y editores ---
+.DS_Store
+Thumbs.db
+.vscode/
+node_modules/
