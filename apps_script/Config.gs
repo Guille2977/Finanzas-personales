@@ -10,6 +10,9 @@
  *   SUPABASE_KEY   → clave service_role / secret (NUNCA la anon/publishable)
  * El bot de Telegram ya NO vive aquí: es la Edge Function de Supabase
  * supabase/functions/telegram-webhook (sus claves van en Edge Functions → Secrets).
+ * Para las alertas (Alertas.gs), los mismos valores que la Edge Function:
+ *   TELEGRAM_TOKEN    → token del bot (@BotFather)
+ *   TELEGRAM_CHAT_ID  → tu chat_id
  * Opcionales:
  *   HOJA_ID        → ID de la hoja "Movimientos bancarios" (solo para migrar)
  *   GMAIL_CONSULTA → reemplaza la consulta por defecto sin tocar código
@@ -29,6 +32,10 @@ const CONFIG = {
   // falte se procesa en la siguiente corrida (cada 15 min).
   LIMITE_MS: 4.5 * 60 * 1000,
   MINUTOS_ACTIVADOR: 15,
+  // Alertas (Alertas.gs): QUÉ avisar y los umbrales viven en la base
+  // (sql/11: umbrales_presupuesto, parametros); aquí solo el ritmo de envío.
+  MINUTOS_ALERTAS: 15,
+  MAX_ALERTAS_POR_CORRIDA: 20,
   ZONA: 'America/Lima',
   PESTANA_MIGRACION: 'Movimientos',
 };

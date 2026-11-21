@@ -1,0 +1,6 @@
+# clasp push/pull: solo el código que corre en Apps Script.
+# Sin esto, "clasp push" subiría también el bot archivado (funciones con el
+# mismo nombre que chocarían) y los .md/.ts.
+archivo_bot_apps_script/**
+**/*.md
+**/*.ts

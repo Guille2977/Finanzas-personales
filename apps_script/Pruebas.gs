@@ -42,6 +42,38 @@ function probarTodo() {
     ['CIP: código', () => extractorPagoEfectivo_(EJEMPLO_CIP).numeroOperacion, 'CIP-12345678'],
     ['CIP: monto', () => extractorPagoEfectivo_(EJEMPLO_CIP).monto, 120],
     ['fuente: desconocida → null', () => identificarFuente_(FUENTES_PRUEBA, 'otro@x.com', 'Hola'), null],
+    // Alertas.gs: qué decide avisar lo prueba sql/11; aquí, el envío y la cola (sin red).
+    ['alerta: envía a la URL y chat correctos', () => {
+      let url, cuerpo;
+      enviarTelegram_('hola', { token: 'T0K', chat: '99', fetch: (u, p) => { url = u; cuerpo = JSON.parse(p.payload); return RESPUESTA_TG(200, '{"ok":true}'); } });
+      return [url, cuerpo.chat_id, cuerpo.text];
+    }, ['https://api.telegram.org/botT0K/sendMessage', '99', 'hola']],
+    ['alerta: Telegram 403 → error con el motivo', () => {
+      try { enviarTelegram_('x', { token: 'T0K', chat: '99', fetch: () => RESPUESTA_TG(403, '{"description":"Forbidden: bot was blocked by the user"}') }); }
+      catch (e) { return e.message; }
+    }, 'Telegram 403: Forbidden: bot was blocked by the user'],
+    ['alerta: el token nunca queda en el error', () => {
+      try { enviarTelegram_('x', { token: 'T0K', chat: '99', fetch: () => { throw new Error('Address unavailable: https://api.telegram.org/botT0K/sendMessage'); } }); }
+      catch (e) { return e.message.includes('T0K'); }
+    }, false],
+    ['alerta: envía y marca todas', () => {
+      const marcas = [];
+      const r = enviarPendientes_([{ id: 1, mensaje: 'a', intentos: 0 }, { id: 2, mensaje: 'b', intentos: 2 }],
+        () => {}, (id, c) => marcas.push([id, !!c.enviada_en, c.intentos]));
+      return [r.enviadas, r.fallidas, marcas];
+    }, [2, 0, [[1, true, 1], [2, true, 3]]]],
+    ['alerta: si falla, suma intento y se detiene', () => {
+      const marcas = [];
+      const r = enviarPendientes_([{ id: 1, mensaje: 'a', intentos: 0 }, { id: 2, mensaje: 'b', intentos: 0 }],
+        () => { throw new Error('Telegram 502: Bad Gateway'); }, (id, c) => marcas.push([id, !!c.enviada_en, c.intentos, c.ultimo_error]));
+      return [r.enviadas, r.fallidas, marcas];
+    }, [0, 1, [[1, false, 1, 'Telegram 502: Bad Gateway']]]],
+    ['alerta: la primera sale aunque falle la segunda', () => {
+      const marcas = [];
+      enviarPendientes_([{ id: 1, mensaje: 'a', intentos: 0 }, { id: 2, mensaje: 'b', intentos: 0 }],
+        (t) => { if (t === 'b') throw new Error('Telegram 429: Too Many Requests'); }, (id, c) => marcas.push([id, !!c.enviada_en]));
+      return marcas;
+    }, [[1, true], [2, false]]],
   ];
 
   let fallos = 0;
@@ -73,6 +105,7 @@ const EJEMPLO_CIP = {
           'Código de pago 12345678 Monto a pagar S/. 120.00\n\n¡Hola! Gracias por realizar el pago, ' +
           'ahora procederemos a informar a Betsson QR para continuar con los siguientes pasos de tu orden.',
 };
+const RESPUESTA_TG = (codigo, texto) => ({ getResponseCode: () => codigo, getContentText: () => texto });
 const RPC_CAIDO = () => { throw new Error('Supabase 404: fn_clasificar no existe'); };
 const FUENTES_PRUEBA = [
   { nombre: 'rechazo', reRemitente: /notificacionesbcp\.com\.pe/i, reAsunto: /rechaz/i },
