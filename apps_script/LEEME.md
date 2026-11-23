@@ -12,10 +12,13 @@ Proyecto NUEVO (independiente). El antiguo "Registro de movimientos" sigue igual
 | Extractores.gs | Extrae monto, moneda, operación… (tus regex) |
 | Categorias.gs | Clasifica llamando a `fn_clasificar` en Supabase (misma regla que el bot); si falla, categoría de la fuente o sin categoría |
 | Monitoreo.gs | Registra cada corrida en `ejecuciones` |
-| Alertas.gs | Envía por Telegram los avisos que decide la base (`sql/11`): presupuesto 80 %/100 %, errores de captura y captura detenida |
+| Alertas.gs | Cada 15 min: concilia recibos con cargos del banco y genera el resumen mensual (`sql/13`), y envía por Telegram los avisos que decide la base (`sql/11`): presupuesto 80 %/100 %, errores de captura, captura detenida y resumen del mes |
 | Main.gs | Funciones a ejecutar + pipeline de captura |
 | Migracion.gs | Migra la hoja de cálculo anterior a Supabase (una sola vez) |
+| IA.gs | Gemini propone los campos de un correo que las reglas no entienden; va a "Por revisar" con la etiqueta *sugerido por IA* |
 | Pruebas.gs | Pruebas de la lógica (sin Gmail ni Supabase) |
+| PruebasIA.gs | Pruebas de IA.gs con Gemini simulado (sin red) |
+| PruebasResumen.gs | Pruebas de las tareas previas de Alertas.gs (conciliación y resumen; base simulada) |
 
 ## Instalación (en orden)
 1. script.google.com → **Nuevo proyecto** → nómbralo "Finanzas automatizadas".
@@ -26,7 +29,7 @@ Proyecto NUEVO (independiente). El antiguo "Registro de movimientos" sigue igual
    - `SUPABASE_KEY` = clave **service_role** (o *secret*), nunca la anon
    - `HOJA_ID` = el ID de la URL de la hoja "Movimientos bancarios"
 5. Ejecuta en este orden (selector de función → ▶ Ejecutar), revisando el registro:
-   1. `probarTodo` → 28/28 pruebas OK.
+   1. `probarTodo` → 51/51 pruebas OK.
    2. `probarConexion` → "✅ Conexión OK". (La primera vez pide permisos.)
    3. `migrarHoja` → muestra insertados / ya_existian / errores.
    4. `capturarCorreos` → captura los últimos 10 días.
@@ -68,3 +71,23 @@ Qué avisar lo decide la base (`sql/11_alertas.sql` → `fn_generar_alertas`); A
 3. Crea **Alertas.gs**; en **Config.gs** agrega `MINUTOS_ALERTAS: 15` y `MAX_ALERTAS_POR_CORRIDA: 20` dentro de `CONFIG`; reemplaza **Pruebas.gs**.
 4. Ejecuta: `probarTodo` (28/28) → `probarAlertaTelegram` (te llega un mensaje) → `revisarAlertas` → `crearActivadorAlertas`.
 5. Historial y pendientes: `SELECT * FROM alertas ORDER BY id DESC;`. Umbrales y tiempos: tablas `umbrales_presupuesto` y `parametros` (sin tocar código).
+
+## IA para correos desconocidos (IA.gs, 21/11)
+Si las reglas no entienden un correo (sin monto válido, o fuente desconocida con tipo "Otro"/sin contraparte),
+Gemini propone monto, moneda, sentido, contraparte y categoría. El correo queda en **Por revisar** con
+`sugerido_por_ia = true` y tú confirmas en Retool. **Nunca se registra solo.** No requiere SQL nuevo.
+1. ⚙️ → Propiedades del script → agrega `GEMINI_KEY` (la misma de la Edge Function). Opcional: `GEMINI_MODELO`.
+   Sin la clave todo funciona como antes.
+2. Crea **IA.gs** y **PruebasIA.gs**; reemplaza **Main.gs**, **Reconstruccion.gs** y **Pruebas.gs**.
+3. Ejecuta `probarTodo` (todas OK; no llama a Gemini). No pide permisos nuevos: `script.external_request` ya está en `appsscript.json`.
+4. Si Gemini no estaba disponible (cuota, red), el motivo dice "IA: no disponible": ejecuta `reintentarSugerenciasIA` más tarde.
+5. Uso: `SELECT inicio, llamadas_ia, detalle FROM ejecuciones WHERE llamadas_ia > 0 ORDER BY id DESC;`
+
+## Conciliación y resumen mensual (sql/13, 21/11)
+La regla vive en la base (`sql/13_conciliacion_resumen.sql`); Alertas.gs solo la llama antes de enviar.
+1. Supabase → SQL Editor → ejecuta `sql/13_conciliacion_resumen.sql` (al final: *Conciliación y resumen: 21/21 pruebas OK*). **Primero el SQL**: si pegas Alertas.gs antes, `revisarAlertas` sigue enviando las alertas, pero termina en error ("no existe fn_conciliar_movimientos").
+2. Reemplaza **Alertas.gs**, crea **PruebasResumen.gs** y agrega en **Pruebas.gs**, debajo de `casos.push(...casosIA_());`, la línea `casos.push(...casosResumen_());`.
+3. Ejecuta `probarTodo` (51/51). No hace falta un activador nuevo: usa el de `revisarAlertas`.
+4. Probar el resumen ya (sin esperar al día 1): `SELECT fn_generar_resumen_mensual('2026-10-01');` en Supabase y luego `revisarAlertas`.
+5. Para que un recibo se concilie, su fuente debe tener `es_recibo = true` (Retool → Fuentes) y la consulta de Gmail debe incluir ese remitente (propiedad `GMAIL_CONSULTA`).
+

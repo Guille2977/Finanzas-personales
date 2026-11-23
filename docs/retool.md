@@ -456,6 +456,26 @@ WHERE m.id_movimiento = s.id_movimiento
 RETURNING m.id_movimiento;
 ```
 
+### 6.4 Recibos por conciliar (requiere `sql/13`)
+
+Recibos (Uber, Rappi…) con **más de un** cargo bancario posible: la conciliación automática no adivina y los deja aquí. Tabla `tblConciliar` con **`qConciliarPendientes`**:
+
+```sql
+SELECT id_recibo, fecha_recibo, monto::float8 AS monto, contraparte, cuenta, motivo,
+       candidatos            -- JSON: [{id_banco, fecha, monto, contraparte, descripcion}, ...]
+FROM public.v_conciliacion_por_revisar
+ORDER BY fecha_recibo DESC;
+```
+
+Debajo, un **Select** `selCargo` con *Data source* `{{ tblConciliar.selectedRow.candidatos }}`, *Value* `{{ item.id_banco }}` y *Label* `{{ item.fecha + ' · S/ ' + item.monto + ' · ' + (item.contraparte || item.descripcion) }}`. Dos botones:
+
+- **"Es este cargo"** → **`qVincular`**: `SELECT public.fn_resolver_conciliacion({{ tblConciliar.selectedRow.id_recibo }}, {{ selCargo.value }});`
+- **"No es el mismo gasto"** → **`qNoEsElMismo`**: `SELECT public.fn_resolver_conciliacion({{ tblConciliar.selectedRow.id_recibo }}, NULL);`
+
+En los dos, *On success* → `qConciliarPendientes.trigger()`. La función valida (mismo sentido y moneda, cargo libre) y es idempotente: un doble clic no hace nada malo. Con `NULL` también se **deshace** un vínculo automático equivocado (búscalo en Movimientos: el recibo tiene `id_movimiento_vinculado`).
+
+Para marcar una fuente como recibo: en **Configuración → Fuentes**, columna `es_recibo` (agrégala a la consulta y a `qGuardarFuentes`). Los parámetros `conciliacion_*` y `resumen_*` aparecen solos en **Alertas (umbrales y parámetros)**.
+
 ---
 
 ## 7. Presupuestos
@@ -702,14 +722,14 @@ FROM public.parametros
 ORDER BY clave;
 ```
 
-**`qGuardarParametros`**: solo se cambia el **valor**; las claves las define `sql/11` porque cada una la lee el código.
+**`qGuardarParametros`**: solo se cambia el **valor**; las claves las definen `sql/11` y `sql/13` porque cada una la lee el código.
 
 ```sql
 UPDATE public.parametros p
 SET valor = btrim(c.valor)
 FROM jsonb_to_recordset({{ JSON.stringify(tblParametros.changesetArray) }}::jsonb) AS c(clave TEXT, valor TEXT)
 WHERE p.clave = c.clave
-  AND c.valor ~ '^\s*[0-9]+\s*$'           -- hoy todos los parámetros son números enteros
+  AND c.valor ~ '^\s*([0-9]+(\.[0-9]{1,2})?|true|false)\s*$'   -- enteros, montos (0.10) o true/false (sql/13)
 RETURNING p.clave, p.valor;
 ```
 

@@ -76,6 +76,9 @@ function probarTodo() {
     }, [[1, true], [2, false]]],
   ];
 
+  casos.push(...casosIA_());   // IA para correos desconocidos (PruebasIA.gs)
+  casos.push(...casosResumen_());   // conciliación y resumen mensual (PruebasResumen.gs)
+
   let fallos = 0;
   casos.forEach(([nombre, fn, esperado]) => {
     let obtenido;

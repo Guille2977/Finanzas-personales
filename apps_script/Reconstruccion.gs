@@ -80,9 +80,10 @@ function pasoReconstruccion_(est) {
   const leidosAntes = est.c.leidos;
   const erroresAntes = est.c.errores;
   let idEjecucion = null;
+  let ctx = null;
   try {
     if (!est.prueba) idEjecucion = iniciarEjecucion_('captura');
-    const ctx = { fuentes: cargarFuentes_() };
+    ctx = { fuentes: cargarFuentes_() };
     // Se cargan una vez por lote (las tablas son pequeñas): así cada correo
     // se compara en memoria en vez de hacer varias consultas.
     const movs = db_.leer('movimientos',
@@ -127,7 +128,8 @@ function pasoReconstruccion_(est) {
     if (e.transitorio) programarContinuacion_();
     throw e;
   } finally {
-    finalizarEjecucion_(idEjecucion, { leidos: est.c.leidos - leidosAntes, errores: est.c.errores - erroresAntes },
+    finalizarEjecucion_(idEjecucion, { leidos: est.c.leidos - leidosAntes, errores: est.c.errores - erroresAntes,
+                                       llamadas_ia: ctx && ctx.ia ? ctx.ia.llamadas : 0 },
       [`Reconstrucción desde correos (lote). Acumulado: ${JSON.stringify(est.c)}`]);
     lock.releaseLock();
   }
@@ -167,7 +169,12 @@ function reconstruirCorreo_(correo, ctx, movs, correosBd, est) {
     }
     est.c[d.estado === 'ignorado' ? 'ignorados' : 'por_revisar']++;
     if (d.estado === 'por_revisar') contarMotivo_(est, correo, d.detalle);
-    if (!est.prueba) marcar_({ id_correo: idCorreo }, d.estado, d.detalle, d.datos);
+    if (!est.prueba) {
+      // Igual que la captura: un "Por revisar" nuevo puede llevar sugerencia de IA.
+      // En modo prueba no se llama (no gasta cuota).
+      const f = d.estado === 'por_revisar' ? completarConIA_(correo, d, ctx) : d;
+      marcar_({ id_correo: idCorreo }, f.estado, f.detalle, f.datos, f.sugeridoPorIA);
+    }
     return;
   }
 

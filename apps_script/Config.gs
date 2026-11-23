@@ -16,6 +16,7 @@
  * Opcionales:
  *   HOJA_ID        → ID de la hoja "Movimientos bancarios" (solo para migrar)
  *   GMAIL_CONSULTA → reemplaza la consulta por defecto sin tocar código
+ *   GEMINI_KEY     → activa las sugerencias de IA para correos desconocidos (IA.gs)
  */
 
 const CONFIG = {

@@ -5,10 +5,16 @@
  *   crearActivadorAlertas()   → crea ese activador (idempotente: no se duplica).
  *   probarAlertaTelegram()    → manda un mensaje de prueba (verifica token y chat).
  *
- * Reparto (ver sql/11_alertas.sql):
- *   1. db_.rpc('fn_generar_alertas') → la base revisa presupuestos, errores de
- *      captura y captura detenida, y ENCOLA en la tabla `alertas` lo que haya
- *      que avisar. La clave UNIQUE impide repetir un aviso.
+ * Reparto (ver sql/11_alertas.sql y sql/13_conciliacion_resumen.sql):
+ *   1. Tareas en la base, en este orden (TAREAS_ALERTAS_):
+ *      · fn_conciliar_movimientos   → vincula recibo ↔ cargo bancario (13).
+ *        Va primero: así el presupuesto no cuenta dos veces el mismo gasto.
+ *      · fn_generar_resumen_mensual → el día 1 encola el resumen del mes (13).
+ *      · fn_generar_alertas         → presupuesto, errores de captura y
+ *        captura detenida (11).
+ *      Todas ENCOLAN en la tabla `alertas`; la clave UNIQUE impide repetir
+ *      un aviso. Si una tarea falla, las demás siguen (y la corrida termina
+ *      en error para que te enteres).
  *   2. Aquí se leen los pendientes (v_alertas_pendientes), se envían y se
  *      marcan con enviada_en SOLO después de que Telegram responde 200.
  *      Si falla, queda pendiente y se reintenta en la siguiente corrida.
@@ -23,6 +29,9 @@
  *   TELEGRAM_CHAT_ID  → tu chat_id (el bot solo te escribe a ti)
  */
 
+/** Funciones de la base que corren antes de enviar, en este orden. */
+const TAREAS_ALERTAS_ = ['fn_conciliar_movimientos', 'fn_generar_resumen_mensual', 'fn_generar_alertas'];
+
 function revisarAlertas() {
   const lock = LockService.getScriptLock();
   // Comparte el candado con la captura: si está corriendo, espera hasta 30 s;
@@ -32,25 +41,31 @@ function revisarAlertas() {
   let idEjecucion = null;
   const cont = { leidos: 0, insertados: 0, errores: 0 };
   const mensajes = [];
+  let tareas = { resultados: {}, errores: [] };
   try {
-    const nuevas = db_.rpc('fn_generar_alertas');
+    tareas = ejecutarTareas_(TAREAS_ALERTAS_, (fn) => db_.rpc(fn));
+    const conc = tareas.resultados.fn_conciliar_movimientos || {};
     const pendientes = db_.leer('v_alertas_pendientes', `select=id,mensaje,intentos&limit=${CONFIG.MAX_ALERTAS_POR_CORRIDA}`);
-    // Sin pendientes no se registra la corrida: si cada revisión dejara una
+    // Sin novedades no se registra la corrida: si cada revisión dejara una
     // fila en `ejecuciones`, v_salud_sistema (que mira la última ejecución de
     // cualquier proceso) diría "ok" aunque la captura estuviera detenida.
-    if (!pendientes.length) { console.log('Sin alertas pendientes.'); return; }
+    if (!pendientes.length && !tareas.errores.length && !conc.vinculados) {
+      console.log('Sin alertas pendientes. ' + JSON.stringify(tareas.resultados));
+      return;
+    }
 
     idEjecucion = iniciarEjecucion_('alertas');
     const r = enviarPendientes_(pendientes, enviarTelegram_, marcarAlerta_);
     cont.leidos = pendientes.length;
     cont.insertados = r.enviadas;           // en esta tabla "insertados" = avisos enviados
-    cont.errores = r.fallidas;
-    mensajes.push(`Nuevas: ${nuevas} · enviadas: ${r.enviadas} · fallidas: ${r.fallidas}`, ...r.errores);
+    cont.errores = r.fallidas + tareas.errores.length;
+    mensajes.push(`Nuevas: ${tareas.resultados.fn_generar_alertas ?? '?'} · enviadas: ${r.enviadas} · fallidas: ${r.fallidas}`,
+      `Conciliación: ${JSON.stringify(conc)}`, ...tareas.errores, ...r.errores);
     console.log(mensajes.join('\n'));
   } catch (e) {
-    // Error general (Supabase caído, fn_generar_alertas no existe...). Se
-    // intenta dejar constancia y se relanza para que Apps Script marque la
-    // ejecución como fallida (y te llegue su correo de fallas).
+    // Error general (Supabase caído...). Se intenta dejar constancia y se
+    // relanza para que Apps Script marque la ejecución como fallida (y te
+    // llegue su correo de fallas).
     cont.errores++;
     mensajes.push('Error general: ' + e.message);
     try { if (!idEjecucion) idEjecucion = iniciarEjecucion_('alertas'); } catch (_) { /* base caída */ }
@@ -59,6 +74,9 @@ function revisarAlertas() {
     finalizarEjecucion_(idEjecucion, cont, mensajes);
     lock.releaseLock();
   }
+  // Una tarea falló pero lo demás se envió: igual se marca la corrida como
+  // fallida (p. ej. falta correr sql/13 en Supabase).
+  if (tareas.errores.length) throw new Error(tareas.errores.join(' | '));
 }
 
 function crearActivadorAlertas() {
@@ -77,6 +95,26 @@ function probarAlertaTelegram() {
 // ---------------------------------------------------------------------
 // Lógica pura (se prueba en Pruebas.gs sin red: recibe sus dependencias)
 // ---------------------------------------------------------------------
+
+/**
+ * Corre las funciones de la base en orden. Si una falla, anota el error y
+ * SIGUE con las demás: que la conciliación falle no debe impedir que llegue
+ * un aviso de presupuesto (ni al revés).
+ * @param tareas nombres de funciones de la base
+ * @param rpc    (nombre) => resultado, lanza si falla
+ * @return { resultados: { nombre: valor }, errores: ['nombre: mensaje'] }
+ */
+function ejecutarTareas_(tareas, rpc) {
+  const r = { resultados: {}, errores: [] };
+  for (const fn of tareas) {
+    try {
+      r.resultados[fn] = rpc(fn);
+    } catch (e) {
+      r.errores.push(`${fn}: ${String(e.message).slice(0, 300)}`);
+    }
+  }
+  return r;
+}
 
 /**
  * Envía los pendientes EN ORDEN. Ante el primer error se detiene: casi

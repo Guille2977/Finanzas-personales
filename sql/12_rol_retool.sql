@@ -78,6 +78,8 @@ COMMENT ON ROLE retool_panel IS 'Panel de Retool: lectura + edición de configur
 --    Así, si una columna sale de la lista, el permiso desaparece
 --    (un GRANT repetido no hace nada; un permiso olvidado sí es riesgo).
 --    REVOKE sobre la tabla también quita los permisos por columna.
+--    OJO: también quita los que agrega sql/13 (conciliación). Si vuelves a
+--    correr este script, corre sql/13 justo después.
 -- ---------------------------------------------------------------------
 REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM retool_panel;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM retool_panel;
@@ -353,7 +355,7 @@ BEGIN
                               AND a.grantee = 0)),   -- grantee 0 = PUBLIC
         ('cada tabla que lee tiene su política RLS para el rol',
             (SELECT count(DISTINCT tablename) FROM pg_policies
-             WHERE schemaname = 'public' AND r = ANY (roles)) = 13)
+             WHERE schemaname = 'public' AND r = ANY (roles)) >= 13)   -- >= : sql/13 agrega conciliacion_revision
     ) AS t(prueba, ok)
     WHERE ok IS NOT TRUE;     -- NULL también cuenta como falla
 

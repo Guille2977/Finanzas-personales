@@ -5,6 +5,7 @@
  *   capturarCorreos()    → lo llama el activador cada 15 min.
  *   crearActivador()     → crea el activador (idempotente: no se duplica).
  *   reprocesarErrores()  → tras corregir un extractor, reintenta los 'error'.
+ *   (Sugerencias de IA para correos desconocidos: IA.gs.)
  *   (La reconstrucción completa está en Reconstruccion.gs.)
  * (Las funciones que terminan en "_" son internas y no salen en el menú.)
  */
@@ -54,9 +55,10 @@ function procesarLote_(ids, proceso, opciones) {
   const cont = { leidos: 0, insertados: 0, por_revisar: 0, errores: 0 };
   const mensajes = [];
   let idEjecucion = null;
+  let ctx = null;
   try {
     idEjecucion = iniciarEjecucion_(proceso);
-    const ctx = { fuentes: cargarFuentes_() };
+    ctx = { fuentes: cargarFuentes_() };
     const porProcesar = opciones.soloNuevos ? filtrarNuevos_(ids) : ids;
 
     for (const id of porProcesar) {
@@ -86,6 +88,11 @@ function procesarLote_(ids, proceso, opciones) {
     mensajes.push('Error general: ' + e.message);
     throw e;
   } finally {
+    const ia = ctx && ctx.ia;   // uso de Gemini en esta corrida (IA.gs)
+    if (ia) {
+      cont.llamadas_ia = ia.llamadas;
+      if (ia.fallos || ia.cortada) mensajes.push(`IA: ${ia.llamadas} llamada(s), ${ia.fallos} fallo(s)${ia.cortada ? ', se dejó de llamar: ' + ia.cortada : ''}`);
+    }
     finalizarEjecucion_(idEjecucion, cont, mensajes);
     lock.releaseLock();
   }
@@ -164,15 +171,17 @@ function guardarCorreo_(correo, fuente) {
 }
 
 /**
- * Captura normal de un correo: guardar original → decidir → insertar → marcar.
+ * Captura normal de un correo: guardar original → decidir → (IA si las
+ * reglas no alcanzan; solo para "Por revisar") → insertar → marcar.
  * Devuelve 'procesado' | 'por_revisar' | 'ignorado'.
  */
 function procesarCorreo_(correo, ctx) {
   const fuente = identificarFuente_(ctx.fuentes, correo.remitente, correo.asunto);
   const raw = guardarCorreo_(correo, fuente);
   try {
-    const d = decidir_(correo, ctx);
-    if (d.estado !== 'procesado') return marcar_(raw, d.estado, d.detalle, d.datos);
+    // La IA solo completa un "Por revisar": nunca convierte un correo en movimiento.
+    const d = completarConIA_(correo, decidir_(correo, ctx), ctx);
+    if (d.estado !== 'procesado') return marcar_(raw, d.estado, d.detalle, d.datos, d.sugeridoPorIA);
     try {
       db_.insertar('movimientos', [Object.assign({}, d.movimiento, { id_correo: raw.id_correo })]);
     } catch (e) {
@@ -194,11 +203,12 @@ function procesarCorreo_(correo, ctx) {
   }
 }
 
-function marcar_(raw, estado, detalle, datos) {
+function marcar_(raw, estado, detalle, datos, sugeridoPorIA) {
   db_.actualizar('correos_raw', `id_correo=eq.${raw.id_correo}`, {
     estado: estado,
     detalle_error: detalle,
     datos_extraidos: datos || null,
+    sugerido_por_ia: Boolean(sugeridoPorIA),   // se envía siempre: un reproceso sin IA no deja la etiqueta vieja
     procesado_en: new Date().toISOString(),
   });
   return estado;
