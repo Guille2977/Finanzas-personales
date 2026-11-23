@@ -72,6 +72,11 @@ flowchart LR
 - `movimientos` es la tabla central: **una sola** para todos los bancos y billeteras. Agregar un banco nuevo es insertar filas en `entidades`, `cuentas` y `fuentes`, no crear tablas.
 - Catálogos de configuración: `entidades`, `cuentas`, `categorias`, `diccionario`, `fuentes`, `frases_sentido`, `presupuestos`, `umbrales_presupuesto`, `parametros`.
 - Operación y monitoreo: `correos_raw`, `ejecuciones`, `telegram_updates`, `alertas` (bandeja de salida de avisos y resúmenes), `conciliacion_revision` (recibos con más de un cargo posible y decisiones tomadas a mano).
+- **Tablas sin clave foránea, a propósito** (en el diagrama, "tabla independiente" y línea punteada). No describen cosas que pertenezcan a otra fila, sino reglas, configuración o registros:
+  - `telegram_updates`: guarda el `update_id` de cada mensaje ya atendido; si Telegram reenvía el mismo, el `PRIMARY KEY` lo rechaza (idempotencia). Se relaciona con `movimientos` por `numero_operacion = 'TG-<update_id>-n'`.
+  - `frases_sentido`: reglas por texto ("me yapearon" → ingreso) que el bot usa para decidir `movimientos.sentido`.
+  - `umbrales_presupuesto` y `parametros`: configuración en tablas, no en código (qué % avisa, cuántas horas sin captura es una falla). Se cambian con un `UPDATE` o desde Retool, sin redesplegar.
+  - `ejecuciones`: bitácora de cada corrida; alimenta `v_salud_sistema` y las alertas `error_captura` / `sin_captura`.
 - Vistas: `v_gasto_mensual`, `v_gasto_categoria_mes`, `v_avance_presupuesto`, `v_salud_sistema` (todas sobre `v_movimientos_contables`, que excluye anulados, recibos conciliados y transferencias entre cuentas propias). Para la conciliación: `v_conciliacion_candidatos` y `v_conciliacion_por_revisar`.
 
 ## 3. Decisiones técnicas y su porqué
@@ -122,6 +127,10 @@ flowchart LR
 - Antes de enviar texto a Gemini se **anonimiza**: números largos (tarjeta, cuenta, celular, operación) y direcciones de correo; de un correo solo va el asunto y el inicio del cuerpo. La clave va en una cabecera, nunca en la URL.
 - El sistema **solo lee** Gmail: no borra ni mueve correos.
 - En este repositorio **solo hay datos de demostración**. `.gitignore` excluye `.clasp.json`, `.env`, credenciales y notas privadas.
+- **El panel entra con un usuario de mínimo privilegio** (`retool_panel`, `sql/12`): puede leer y corregir categorías, pero no borrar ni cambiar montos. Probado desde Retool:
+
+  ![Retool sin permiso para DELETE](docs/img/retool_permiso_denegado.png)
+- **Despliegue del bot con un token de alcance mínimo:** solo puede desplegar Edge Functions de este proyecto; no lee secretos ni la base (`docs/despliegue_bot.md`).
 
 ## 6. Pruebas
 
