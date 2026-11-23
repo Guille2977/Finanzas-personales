@@ -1,0 +1,13 @@
+# Configuración de Supabase CLI para este repositorio.
+# Solo lo que el proyecto necesita; el resto toma los valores por defecto de la CLI.
+# Aquí NO van claves: los secretos viven en Supabase (Edge Functions → Secrets)
+# y se cargan con `supabase secrets set` (ver docs/despliegue_bot.md).
+
+# Nombre local del proyecto (no es el "project ref" de Supabase: ese se pasa al desplegar).
+project_id = "finanzas-personales"
+
+[functions.telegram-webhook]
+# Telegram no envía un JWT: la seguridad es la cabecera X-Telegram-Bot-Api-Secret-Token,
+# que la función compara con TELEGRAM_SECRETO. Si esto fuera true, el gateway de Supabase
+# rechazaría cada mensaje con 401 antes de llegar al código y el bot dejaría de responder.
+verify_jwt = false

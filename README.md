@@ -1,11 +1,10 @@
 # Finanzas personales automatizadas
 
-Sistema en la nube que **captura mis movimientos de dinero desde los correos del banco**, me deja **registrar por Telegram** lo que el banco no ve (efectivo, Yape enviados), los **clasifica**, los guarda en **PostgreSQL**, los muestra en un **panel** con presupuestos y me **avisa por Telegram** si me acerco al límite o si algo falla. Funciona solo, 24/7, sin depender de mi PC y con servicios gratuitos.
+Sistema en la nube que **captura mis movimientos de dinero desde los correos del banco**, me deja **registrar por Telegram** lo que el banco no ve (efectivo, Yape enviados), los **clasifica**, **concilia** el recibo de una app con su cargo del banco para no contarlo dos veces, los guarda en **PostgreSQL**, los muestra en un **panel** con presupuestos, me **avisa por Telegram** si me acerco al límite o si algo falla y el día 1 me manda el **resumen del mes**. Funciona solo, 24/7, sin depender de mi PC y con servicios gratuitos.
 
-> Proyecto personal de aprendizaje en datos/BI. Todo lo que se ve en este repositorio y en las capturas son **datos de demostración ficticios** (`sql/demo/datos_demo.sql`).
+> Proyecto personal de aprendizaje en datos/BI. El repositorio solo trae **datos de demostración ficticios** (`sql/demo/datos_demo.sql`). Las capturas son del sistema en uso real, con nombres, correo y comercios **difuminados**.
 
-<!-- CAPTURA: GIF de 15–20 s: escribir "pasaje 3, menu 12" en Telegram → confirmación con botones → el gasto aparece en el panel. Guardar como docs/img/demo.gif -->
-![Demo](docs/img/demo.gif)
+<!-- CAPTURA: GIF de 15–20 s: escribir "pasaje 3, menu 12" en Telegram → confirmación con botones → el gasto aparece en el panel. Guardar como docs/img/demo.gif y agregar debajo: ![Demo](docs/img/demo.gif) -->
 
 ---
 
@@ -31,7 +30,7 @@ flowchart LR
         IA[🤖 Gemini API<br/>solo respaldo]
     end
     subgraph Datos["Supabase · PostgreSQL"]
-        DB[(tablas · vistas<br/>fn_clasificar<br/>fn_generar_alertas)]
+        DB[(tablas · vistas<br/>fn_clasificar<br/>fn_generar_alertas<br/>fn_conciliar_movimientos<br/>fn_generar_resumen_mensual)]
     end
     subgraph Presentación
         R[Retool<br/>panel]
@@ -39,9 +38,10 @@ flowchart LR
     G --> AS -->|API REST| DB
     T -->|webhook| EF --> DB
     EF -.->|"texto anonimizado"| IA
+    AS -.->|"correo desconocido<br/>anonimizado"| IA
     DB --> R
     EF -->|confirmación y botones| T
-    DB -->|alertas pendientes| AS -.->|"⚠️ 80 % / 100 % · fallas"| T
+    DB -->|alertas pendientes| AS -.->|"⚠️ 80 % / 100 % · fallas · 📊 resumen del mes"| T
 ```
 
 <!-- CAPTURA (opcional): exportar este diagrama o uno propio a docs/img/arquitectura.png -->
@@ -51,9 +51,9 @@ flowchart LR
 | Fuentes | Gmail, Telegram | Correos de notificación del banco y apps; mensajes como `pasaje 3` |
 | Lógica | Apps Script (`apps_script/`) | Lee Gmail, identifica la fuente, extrae monto/fecha/operación, clasifica y carga. Envía las alertas por Telegram |
 | Lógica | Edge Function (`supabase/functions/telegram-webhook/`) | Bot: interpreta el mensaje, registra, botones de corrección y deshacer, comandos `/hoy`, `/semana`, `/mes`, `/presupuesto` |
-| Datos | Supabase (`sql/`) | Tablas con restricciones, vistas de reporte y las reglas compartidas (`fn_clasificar`, `frases_sentido`, `fn_generar_alertas`) |
+| Datos | Supabase (`sql/`) | Tablas con restricciones, vistas de reporte y las reglas compartidas (`fn_clasificar`, `frases_sentido`, `fn_generar_alertas`, `fn_conciliar_movimientos`, `fn_generar_resumen_mensual`) |
 | Presentación | Retool | Dashboard, movimientos, "Por revisar", presupuestos, configuración y salud del sistema |
-| Apoyo | Gemini API | Solo cuando las reglas no entienden un mensaje: **propone, yo confirmo** |
+| Apoyo | Gemini API | Solo cuando las reglas no entienden un mensaje del bot o un correo de formato desconocido: **propone, yo confirmo** |
 
 ### Flujo de captura de un correo
 
@@ -62,18 +62,17 @@ flowchart LR
 3. Guarda el correo original en `correos_raw` (trazabilidad y reprocesamiento sin volver a Gmail).
 4. Identifica la fuente con la tabla `fuentes` (expresiones regulares de remitente y asunto) y aplica su extractor.
 5. Clasifica con `fn_clasificar` y guarda el movimiento.
-6. Si algo falla en un correo, ese correo queda `por_revisar` o `error` con el motivo, y **los demás se siguen procesando**.
+6. Si algo falla en un correo, ese correo queda `por_revisar` o `error` con el motivo, y **los demás se siguen procesando**. Si las reglas no entienden el formato, Gemini propone monto, sentido, contraparte y categoría, y el correo queda en "Por revisar" con la etiqueta *🤖 Sugerido por IA* para confirmarlo en Retool; **nunca se registra solo**.
 7. Registra la corrida en `ejecuciones` (leídos, insertados, errores).
 
 ### Modelo de datos
 
-<!-- CAPTURA: diagrama entidad-relación desde Supabase (Database → Schema Visualizer). Guardar como docs/img/modelo.png -->
 ![Modelo de datos](docs/img/modelo.png)
 
 - `movimientos` es la tabla central: **una sola** para todos los bancos y billeteras. Agregar un banco nuevo es insertar filas en `entidades`, `cuentas` y `fuentes`, no crear tablas.
 - Catálogos de configuración: `entidades`, `cuentas`, `categorias`, `diccionario`, `fuentes`, `frases_sentido`, `presupuestos`, `umbrales_presupuesto`, `parametros`.
-- Operación y monitoreo: `correos_raw`, `ejecuciones`, `telegram_updates`, `alertas` (bandeja de salida de avisos).
-- Vistas: `v_gasto_mensual`, `v_gasto_categoria_mes`, `v_avance_presupuesto`, `v_salud_sistema` (todas sobre `v_movimientos_contables`, que excluye anulados, recibos conciliados y transferencias entre cuentas propias).
+- Operación y monitoreo: `correos_raw`, `ejecuciones`, `telegram_updates`, `alertas` (bandeja de salida de avisos y resúmenes), `conciliacion_revision` (recibos con más de un cargo posible y decisiones tomadas a mano).
+- Vistas: `v_gasto_mensual`, `v_gasto_categoria_mes`, `v_avance_presupuesto`, `v_salud_sistema` (todas sobre `v_movimientos_contables`, que excluye anulados, recibos conciliados y transferencias entre cuentas propias). Para la conciliación: `v_conciliacion_candidatos` y `v_conciliacion_por_revisar`.
 
 ## 3. Decisiones técnicas y su porqué
 
@@ -83,9 +82,12 @@ flowchart LR
 | **Apps Script** para leer correos | Acceso nativo a Gmail, corre gratis en la nube con activadores | Power Automate: sin licencia útil |
 | **Edge Function** para el bot (no Apps Script) | Medido: Apps Script responde al webhook con un 302 y tardaba 2–3 s, Telegram reintentaba y se trababa; la Edge Function responde en ~0,6–0,9 s | Bot en Apps Script (archivado en `apps_script/archivo_bot_apps_script/` con el motivo) |
 | **Reglas antes que IA** | Gratis, predecible y explicable. La IA solo actúa cuando las reglas no entienden, propone y yo confirmo. Si falla o se acaba la cuota, el sistema sigue funcionando | IA para todo: costo, latencia (~5 s) y errores no explicables |
+| **La IA no puede inventar** (correos desconocidos, `IA.gs`) | Su respuesta se valida: el monto debe aparecer en el correo, la contraparte también y la categoría debe existir y coincidir con el sentido; si no, se descarta. El correo se trata como dato (ignora instrucciones dentro de él). Máx. 10 llamadas por corrida y se deja de llamar ante un 429 o 2 fallos seguidos | Registrar directo lo que diga la IA |
 | **Una sola regla de clasificación en SQL** (`fn_clasificar`) | Antes la misma lógica estaba escrita en Apps Script y en el bot; un cambio en una y no en la otra daba categorías distintas para el mismo texto | Duplicar la lógica en cada cliente |
 | **Configuración en tablas** (`fuentes`, `diccionario`, `frases_sentido`, `presupuestos`, `umbrales_presupuesto`, `parametros`) | Agregar un banco, una palabra o una frase es un `INSERT` (o una edición en Retool), sin volver a desplegar código | Listas y regex escritas en el código |
 | **Alertas: SQL decide, Apps Script envía** (`fn_generar_alertas` + tabla `alertas`) | La regla (qué umbral se cruzó, qué ya se avisó) vive en un solo lugar y se prueba en SQL. Cada aviso tiene una clave `UNIQUE` (`presupuesto:2026-11:cat3:80`), así nunca se repite; se marca como enviado **después** de que Telegram confirma, así un fallo de red no lo pierde (patrón *outbox*). Corre en un activador aparte del de captura para poder avisar si la captura se detiene | Enviar desde un trigger de PostgreSQL (`pg_net`): el token del bot quedaría en la base y un fallo de red haría fallar el `INSERT` del gasto |
+| **Conciliación conservadora** (`fn_conciliar_movimientos`, `sql/13`) | Recibo y cargo se vinculan solo si la pareja es **única en los dos sentidos** (mismo monto ± tolerancia, misma cuenta, ± 24 h). Si hay dos cargos posibles no se adivina: queda "por revisar" en Retool. Un vínculo malo haría desaparecer un gasto real; uno pendiente solo lo cuenta dos veces hasta que lo reviso. Cuenta el cargo del banco (es el dinero que salió) y el recibo le pasa la categoría si no tiene. Ventana, tolerancia y "qué fuente es un recibo" (`fuentes.es_recibo`) son configuración | Elegir el cargo más cercano en el tiempo: falla con dos viajes del mismo precio el mismo día |
+| **Resumen mensual por la misma bandeja de alertas** (`fn_generar_resumen_mensual`) | Reutiliza la tabla `alertas` y su envío (clave `resumen:2026-10` → uno por mes aunque la función corra cada 15 min). Se genera el día 1 desde las 8:00 (los correos del día 31 alcanzan a llegar) y compara cada categoría con el presupuesto **vigente ese mes**, no el de hoy | Un activador mensual aparte en Apps Script: más código de envío y si ese día falla, el resumen se pierde |
 | **Retool** como panel | Se alimenta de mis propias consultas SQL y permite **editar** datos (corregir categorías, resolver "Por revisar") | Grafana (no edita), Streamlit (estética básica) |
 | **Telegram** en vez de WhatsApp | Gratis y el bot se crea en minutos | WhatsApp exige la API empresarial de Meta |
 | `NUMERIC(12,2)` y montos siempre positivos | Exactitud con dinero; el signo lo da la columna `sentido` | `FLOAT` (errores de redondeo) |
@@ -108,15 +110,16 @@ flowchart LR
 | Telegram no responde | La alerta queda pendiente y se reintenta cada 15 min (máximo 5 intentos, configurable) |
 | Dos ejecuciones se cruzan | `LockService`: la segunda espera o se salta |
 | Registro a mano un Yape que ya llegó por correo | El bot detecta el mismo monto, día y cuenta y pregunta "¿Es el mismo?" |
-| El mismo gasto llega por dos fuentes (recibo de la app y consumo del banco) | El modelo ya lo soporta: el recibo apunta al movimiento bancario (`id_movimiento_vinculado`) y las vistas no lo suman. La vinculación automática está en los siguientes pasos |
+| El mismo gasto llega por dos fuentes (recibo de la app y consumo del banco) | Cada 15 min `fn_conciliar_movimientos` vincula el recibo a su cargo (`id_movimiento_vinculado`) y las vistas ya no lo suman. Si hay más de un cargo posible, queda "por revisar" en Retool. Si después anulo el cargo, el recibo se desvincula solo y vuelve a contar (el gasto nunca desaparece) |
+| El resumen mensual se generaría dos veces o el sistema estaba caído el día 1 | Clave `resumen:YYYY-MM` única; si el día 1 no corrió, se genera hasta el día 3 (`resumen_dias_gracia`) |
 
 ## 5. Seguridad y privacidad
 
-- **Ninguna clave está en el código.** Apps Script las lee de *Propiedades del script* (`SUPABASE_URL`, `SUPABASE_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`); si falla el envío a Telegram, el token se reemplaza por `***` antes de guardar el error; la Edge Function, de *Edge Functions → Secrets* (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_SECRETO`, `GEMINI_KEY`).
+- **Ninguna clave está en el código.** Apps Script las lee de *Propiedades del script* (`SUPABASE_URL`, `SUPABASE_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `GEMINI_KEY` opcional); si falla el envío a Telegram, el token se reemplaza por `***` antes de guardar el error; la Edge Function, de *Edge Functions → Secrets* (`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_SECRETO`, `GEMINI_KEY`).
 - **RLS activado sin políticas** en todas las tablas y permisos solo para `service_role`: las claves públicas (`anon`) no pueden leer ni escribir nada.
 - Las funciones usan `SET search_path = ''` y se revoca `EXECUTE` a `PUBLIC` (en PostgreSQL, a diferencia de SQL Server, toda función nueva la puede ejecutar cualquiera).
 - El bot valida un **secreto en la cabecera** del webhook y **solo responde a mi `chat_id`**.
-- Antes de enviar texto a Gemini se **anonimiza**: números largos (tarjeta, cuenta, celular) y direcciones de correo.
+- Antes de enviar texto a Gemini se **anonimiza**: números largos (tarjeta, cuenta, celular, operación) y direcciones de correo; de un correo solo va el asunto y el inicio del cuerpo. La clave va en una cabecera, nunca en la URL.
 - El sistema **solo lee** Gmail: no borra ni mueve correos.
 - En este repositorio **solo hay datos de demostración**. `.gitignore` excluye `.clasp.json`, `.env`, credenciales y notas privadas.
 
@@ -125,9 +128,10 @@ flowchart LR
 | Qué | Cómo se ejecuta | Resultado |
 |---|---|---|
 | Lógica del bot (interpretar `pasaje 3`, `queque .2`, `me han yapeado 5`, validación de la IA, anonimización…) | `node --experimental-strip-types supabase/functions/telegram-webhook/logica_test.ts` (o `deno run`) | 45/45 |
-| Extractores de correos, fuentes, respaldo de clasificación y envío de alertas (cola, reintentos, token oculto) | En Apps Script: ejecutar `probarTodo` | 28/28 |
+| Extractores de correos, fuentes, respaldo de clasificación, envío de alertas (cola, reintentos, token oculto) y sugerencias de IA (Gemini simulado: 429, red caída, JSON roto, monto inventado) | En Apps Script: ejecutar `probarTodo` | 51/51 |
 | Regla de clasificación y frases de ingreso/egreso | Bloques de prueba al final de `sql/09` y `sql/10` | `ok = true` |
 | Alertas: 79 % no avisa, 80 % avisa una vez, no se repite, anulados no cuentan, salto directo a 100 %, errores con silencio, captura detenida | Bloque final de `sql/11` (crea datos de prueba y los deshace) | 12/12 |
+| Conciliación (pareja única, idempotente, cuenta una vez, monto/ventana/cuenta distintos, tolerancia, ambiguos a revisión, decisión manual, cargo anulado) y resumen mensual (hora y días de gracia, interruptor, contenido, 100 corridas = 1 resumen, mes vacío) | Bloque final de `sql/13` (crea datos de prueba y los deshace) | 21/21 |
 | Usuario de Retool con permisos mínimos: sin DELETE, sin cambiar montos, RLS por filas, resolver "Por revisar" en una transacción | Bloque final de `sql/12` (permisos) y `sql/pruebas/12_rol_retool_pruebas.sql` (entra como el rol e intenta acciones prohibidas; termina en ROLLBACK) | 12/12 y 17/17 |
 | Datos demo coherentes con el esquema y las reglas | `sql/demo/datos_demo.sql` corre 8 pruebas dentro de su transacción; si una falla, no deja nada | 8/8 |
 
@@ -136,16 +140,16 @@ flowchart LR
 Requisitos: cuenta de Google, proyecto gratuito de Supabase, bot de Telegram (@BotFather) y clave de Gemini (Google AI Studio, opcional).
 
 **1. Base de datos (Supabase → SQL Editor)**
-Ejecuta en orden `sql/01_esquema.sql` … `sql/12_rol_retool.sql`. Todos son idempotentes: se pueden volver a correr sin duplicar nada.
+Ejecuta en orden `sql/01_esquema.sql` … `sql/13_conciliacion_resumen.sql`. Todos son idempotentes: se pueden volver a correr sin duplicar nada. (`sql/12` vuelve a dar los permisos de Retool desde cero: si lo repites, repite también `sql/13`.)
 
 **2. Datos de demostración (opcional, en una base aparte)**
 Ejecuta `sql/demo/datos_demo.sql`. Genera 3 meses ficticios con fechas que siempre terminan en el mes actual. Tiene una guardia: si la base tiene un solo movimiento que no sea demo, se detiene sin tocar nada.
 
 **3. Captura de correos (Apps Script)**
-Ver [`apps_script/LEEME.md`](apps_script/LEEME.md). Resumen: crear el proyecto (o `clasp push`), cargar `SUPABASE_URL`, `SUPABASE_KEY`, `TELEGRAM_TOKEN` y `TELEGRAM_CHAT_ID` en Propiedades del script, ejecutar `probarTodo`, `probarConexion`, `crearActivador` y `crearActivadorAlertas`.
+Ver [`apps_script/LEEME.md`](apps_script/LEEME.md). Resumen: crear el proyecto (o `clasp push`), cargar `SUPABASE_URL`, `SUPABASE_KEY`, `TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` y (opcional) `GEMINI_KEY` en Propiedades del script, ejecutar `probarTodo`, `probarConexion`, `crearActivador` y `crearActivadorAlertas`.
 
 **4. Bot de Telegram (Edge Function)**
-Ver [`supabase/functions/telegram-webhook/LEEME.md`](supabase/functions/telegram-webhook/LEEME.md). Resumen: desplegar la función, cargar los secretos, desactivar "Verify JWT" y registrar el webhook con `secret_token`.
+Ver [`supabase/functions/telegram-webhook/LEEME.md`](supabase/functions/telegram-webhook/LEEME.md). Resumen: desplegar la función, cargar los secretos, desactivar "Verify JWT" y registrar el webhook con `secret_token`. Despliegues siguientes con Supabase CLI: `bash scripts/desplegar_bot.sh` (pruebas → despliegue → verificación), ver [`docs/despliegue_bot.md`](docs/despliegue_bot.md).
 
 **5. Panel (Retool)**
 Ver [`docs/retool.md`](docs/retool.md). Resumen: ponerle contraseña al usuario `retool_panel` (creado por `sql/12`, con permisos mínimos), conectar Retool por el **Session pooler** (IPv4) y pegar las consultas de cada pantalla.
@@ -157,16 +161,14 @@ Ver [`docs/retool.md`](docs/retool.md). Resumen: ponerle contraseña al usuario 
 
 ## 8. Capturas del panel
 
-<!-- CAPTURA: Retool · Dashboard (gasto mensual, por categoría, avance de presupuesto). docs/img/panel_dashboard.png -->
 ![Dashboard](docs/img/panel_dashboard.png)
 
-<!-- CAPTURA: Retool · Por revisar (correo sugerido por IA). docs/img/panel_por_revisar.png -->
 ![Por revisar](docs/img/panel_por_revisar.png)
 
-<!-- CAPTURA: Telegram · "pasaje 3, menu 12" con los botones [Cambiar categoría] [Deshacer]. docs/img/bot.png -->
 ![Bot de Telegram](docs/img/bot.png)
 
-<!-- CAPTURA: Retool · Salud del sistema. docs/img/panel_salud.png -->
+*Izquierda: palabra nueva ("makis"), la IA sugiere la categoría y el bot pregunta. Derecha: la siguiente vez ya la sabe (`diccionario.origen = 'bot'`), sin IA.*
+
 ![Salud del sistema](docs/img/panel_salud.png)
 
 ## 9. Estructura del repositorio
@@ -176,8 +178,10 @@ Ver [`docs/retool.md`](docs/retool.md). Resumen: ponerle contraseña al usuario 
 ├── apps_script/                     ← captura de correos (Google Apps Script, vía clasp)
 │   └── archivo_bot_apps_script/     ← versión anterior del bot y por qué se cambió
 ├── supabase/functions/telegram-webhook/   ← bot (TypeScript) + pruebas
+├── scripts/desplegar_bot.sh          ← pruebas + despliegue del bot con Supabase CLI
+├── .github/workflows/bot.yml        ← pruebas en cada push; despliegue manual
 ├── sql/
-│   ├── 01_esquema.sql … 12_rol_retool.sql       ← migraciones numeradas e idempotentes
+│   ├── 01_esquema.sql … 13_conciliacion_resumen.sql   ← migraciones numeradas e idempotentes
 │   └── demo/datos_demo.sql          ← datos ficticios (nunca en la base real)
 └── docs/img/                        ← capturas y GIF
 ```
@@ -188,7 +192,7 @@ Ver [`docs/retool.md`](docs/retool.md). Resumen: ponerle contraseña al usuario 
 - Poner las reglas de negocio en la base (`fn_clasificar`, tablas de configuración) evitó que dos programas se contradijeran.
 - Medir antes de cambiar: el paso del bot a una Edge Function se decidió con tiempos de respuesta, no por preferencia.
 
-**Siguientes pasos:** resumen semanal por correo, vigilancia externa con `pg_cron` (para avisar incluso si Google detiene todos los activadores), conciliación automática entre fuentes, gastos recurrentes, reporte en Power BI conectado a Supabase y nuevas fuentes según aparezcan.
+**Siguientes pasos:** resumen semanal por correo, vigilancia externa con `pg_cron` (para avisar incluso si Google detiene todos los activadores), fuentes de recibos (Uber, Rappi) para alimentar la conciliación, gastos recurrentes, reporte en Power BI conectado a Supabase y nuevas fuentes según aparezcan.
 
 ---
 

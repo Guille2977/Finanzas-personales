@@ -6,7 +6,10 @@
 | logica.ts | Reglas puras: interpretar "pasaje 3", validar la respuesta de la IA, fechas en Lima |
 | logica_test.ts | 45 pruebas de logica.ts (`deno run logica_test.ts`) |
 
-## Despliegue (panel de Supabase)
+## Despliegue (recomendado: Supabase CLI)
+`bash scripts/desplegar_bot.sh` → pruebas, despliegue y verificación. Guía: [`docs/despliegue_bot.md`](../../../docs/despliegue_bot.md).
+
+## Despliegue manual (panel de Supabase, la primera vez)
 1. SQL Editor → `sql/08_bot_edge.sql`, `sql/09_fn_clasificar.sql` y `sql/10_frases_sentido.sql`.
 2. Edge Functions → `telegram-webhook` → Code: reemplaza `index.ts` y agrega `logica.ts` (Add File). Deploy.
 3. "Verify JWT" desactivado (Telegram no envía JWT; la seguridad es el secreto en la cabecera).
