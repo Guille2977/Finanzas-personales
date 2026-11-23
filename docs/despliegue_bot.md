@@ -17,7 +17,8 @@ Hasta ahora el bot se desplegaba copiando `index.ts` y `logica.ts` en el editor 
 
 ## Paso 1 · Dos credenciales como secretos de Codespaces
 
-1. Supabase → avatar → **Account preferences → Access Tokens → Generate new token**. Nombre: `codespaces-finanzas`. Cópialo (empieza con `sbp_`).
+1. Supabase → **Account → Access Tokens → Generate token**. Nombre: `codespaces-finanzas`, vence en 30 días, acceso solo a **este proyecto** y un único permiso: **Edge Functions → Read & write** (todo lo demás en *None*, incluido *Edge Function Secrets*). Cópialo (empieza con `sbp_`).
+   - **Por qué tan poco:** si el token se filtra, solo sirve para desplegar funciones de este proyecto; no puede leer tus secretos, la base ni otros proyectos. Si un día un comando pide más, se agrega ese permiso y nada más.
 2. Tu *project ref* es la parte de la URL: `https://<ref>.supabase.co`.
 3. GitHub → avatar → **Settings → Codespaces → Secrets → New secret**:
    - `SUPABASE_ACCESS_TOKEN` = el token.
@@ -45,7 +46,7 @@ bash scripts/desplegar_bot.sh
 
 Lo que pasa:
 1. **Pruebas.** Si una falla, se detiene y no toca Supabase.
-2. **Despliegue** con `npx supabase@3 functions deploy telegram-webhook --remote=<ref> --no-verify-jwt --use-api`. La CLI te pide confirmar porque cambia producción: responde `y`.
+2. **Despliegue** con `npx supabase@3 functions deploy telegram-webhook --remote=<ref> --no-verify-jwt --use-api`. La CLI te pide confirmar porque cambia producción: elige **Yes** con la flecha ← y Enter (viene marcado "No" para que un Enter accidental no toque producción).
    - `--no-verify-jwt`: Telegram no envía JWT; la seguridad es la cabecera secreta. Está también en `config.toml` (doble seguro).
    - `--use-api`: Supabase empaqueta el código en su servidor, así no hace falta Docker.
 3. **Verificación** contra la función ya desplegada:
